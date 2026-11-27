@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write   # Releases me APK daalne ke liye
 
 jobs:
   build:
@@ -13,31 +13,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Project files nikalo aur jaancho
+      - name: Project files nikalo
         run: |
-          ls -la
-          test -f nexo-project.zip || { echo "::error::nexo-project.zip repo ke sabse upar (root) me nahi mili. Naam bilkul yahi hona chahiye."; exit 1; }
+          test -f nexo-project.zip || { echo "::error::nexo-project.zip repo ke root me nahi mili."; exit 1; }
           unzip -o nexo-project.zip
-          grep -q '<string name="app_name">Nexo</string>' app/src/main/res/values/strings.xml \
-            || { echo "::error::Zip purani hai, usme Nexo naam nahi mila."; exit 1; }
-          test -f app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml \
-            || { echo "::error::Zip me icon nahi mila."; exit 1; }
-          echo "Nexo project files sahi hain."
-
-      - name: Fixed signing key taiyar karo
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-        run: |
-          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
-            printf '%s' "$KEYSTORE_BASE64" | tr -d ' \n\r' | base64 -d > "$RUNNER_TEMP/padhai.jks"
-            keytool -list -keystore "$RUNNER_TEMP/padhai.jks" -storepass "$KEYSTORE_PASSWORD" -alias padhai > /dev/null \
-              || { echo "::error::KEYSTORE_BASE64 ya KEYSTORE_PASSWORD galat paste hua hai"; exit 1; }
-            echo "KEYSTORE_FILE=$RUNNER_TEMP/padhai.jks" >> "$GITHUB_ENV"
-            echo "Fixed signing key mil gayi."
-          else
-            echo "::warning::Signing secrets nahi mile, debug key se sign hoga (update ke liye uninstall karna padega)."
-          fi
 
       - uses: actions/setup-java@v4
         with:
@@ -48,23 +27,41 @@ jobs:
         with:
           gradle-version: 8.7
 
+      - name: Signing key taiyar karo
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::KEYSTORE_BASE64 aur KEYSTORE_PASSWORD secrets add karo (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | tr -d ' \n\r' | base64 -d > "$RUNNER_TEMP/padhai.jks"
+          keytool -list -keystore "$RUNNER_TEMP/padhai.jks" -storepass "$KEYSTORE_PASSWORD" -alias padhai > /dev/null \
+            || { echo "::error::KEYSTORE_BASE64 ya KEYSTORE_PASSWORD galat paste hua hai"; exit 1; }
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/padhai.jks" >> "$GITHUB_ENV"
+
+      - name: Har build ka naya version number
+        run: |
+          CODE=$((100 + GITHUB_RUN_NUMBER))
+          sed -i "s/versionCode = [0-9]*/versionCode = $CODE/; s/versionName = \"[^\"]*\"/versionName = \"1.$CODE\"/" app/build.gradle.kts
+          grep -q "versionCode = $CODE" app/build.gradle.kts
+          echo "APP_VERSION=1.$CODE" >> "$GITHUB_ENV"
+
       - name: APK banao
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: gradle assembleDebug --no-daemon
 
-      - name: Banayi hui APK ka naam dikhao
-        continue-on-error: true
+      - name: APK ko Releases me daalo
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          AAPT2=$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)
-          {
-            echo "### Nexo APK"
-            "$AAPT2" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E "^package:|application-label:" | sed 's/^/- /'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: nexo-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 14
+          APK="Nexo-$APP_VERSION.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$APK"
+          if gh release view "$APP_VERSION" > /dev/null 2>&1; then
+            gh release upload "$APP_VERSION" "$APK" --clobber
+          else
+            gh release create "$APP_VERSION" "$APK" --title "Nexo $APP_VERSION" --notes "Nexo $APP_VERSION" --target "$GITHUB_SHA" --latest
+          fi
           
