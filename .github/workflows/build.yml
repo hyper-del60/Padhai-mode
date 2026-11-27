@@ -1,8 +1,11 @@
-name: APK banao
+name: Nexo APK banao
 
 on:
   push:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -13,6 +16,21 @@ jobs:
       - name: Project files nikalo
         run: unzip -o project.zip
 
+      - name: Fixed signing key taiyar karo
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | tr -d ' \n\r' | base64 -d > "$RUNNER_TEMP/padhai.jks"
+            keytool -list -keystore "$RUNNER_TEMP/padhai.jks" -storepass "$KEYSTORE_PASSWORD" -alias padhai > /dev/null \
+              || { echo "::error::KEYSTORE_BASE64 ya KEYSTORE_PASSWORD galat paste hua hai"; exit 1; }
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/padhai.jks" >> "$GITHUB_ENV"
+            echo "Fixed signing key mil gayi."
+          else
+            echo "::warning::Signing secrets nahi mile, debug key se sign hoga (update ke liye uninstall karna padega)."
+          fi
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -22,11 +40,14 @@ jobs:
         with:
           gradle-version: 8.7
 
-      - name: Debug APK banao
+      - name: APK banao
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: gradle assembleDebug --no-daemon
 
       - uses: actions/upload-artifact@v4
         with:
-          name: padhai-mode-apk
+          name: nexo-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
           
